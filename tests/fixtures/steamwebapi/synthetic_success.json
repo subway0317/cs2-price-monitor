@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "fixture": "synthetic",
+    "note": "This is not a real SteamWebAPI response."
+  },
+  "data": {
+    "lowest": "123.45",
+    "highest_buy": "120.00",
+    "listings": 17,
+    "currency": "CNY",
+    "captured_at": "2026-07-12T10:00:00Z"
+  }
+}

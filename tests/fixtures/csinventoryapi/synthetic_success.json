@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "fixture": "synthetic",
+    "note": "This is not a real CSInventoryAPI response."
+  },
+  "synthetic_quote": {
+    "lowest_listing_price": "123.45",
+    "highest_buy_order_price": "120.00",
+    "listing_count": 17,
+    "currency": "USD"
+  }
+}

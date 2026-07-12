@@ -1,0 +1,18 @@
+database:
+  url: sqlite:///data/cs2_monitor.sqlite3
+
+pricing:
+  suspicious_high_multiplier: "3"
+  suspicious_low_multiplier: "0.333333333333333333"
+
+app:
+  timezone: UTC
+  page_title: CS2 Portfolio Monitor
+
+api:
+  mode: manual
+  provider: csinventoryapi
+
+csinventoryapi:
+  timeout_seconds: "10"
+  market: buff163
