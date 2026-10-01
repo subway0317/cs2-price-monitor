@@ -8,21 +8,28 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from cs2_price_monitor.models import DailyPriceSummary, Holding, Item, PriceSnapshot
+from cs2_price_monitor.models import DailyPriceSummary, Holding, Item, ManualHolding, PriceSnapshot
 
 
 @dataclass(frozen=True)
 class PortfolioValuation:
     item_id: int
     market_name: str
+    catalog_id: str | None
+    version: str | None
+    transaction_quantity: Decimal
+    manual_quantity: Decimal
     quantity: Decimal
-    avg_cost: Decimal
+    avg_cost: Decimal | None
+    known_cost: Decimal | None
+    unknown_cost_quantity: Decimal
     currency: str
     listing_price: Decimal
     buy_order_price: Decimal
     listing_value: Decimal
     quick_sell_value: Decimal
     unrealized_profit: Decimal | None
+    non_calculable_value: Decimal
     change_24h: Decimal | None
     change_7d: Decimal | None
     change_30d: Decimal | None
@@ -80,13 +87,14 @@ class ItemAnalysis:
 
 def calculate_portfolio(session: Session) -> list[PortfolioValuation]:
     """Calculate valuation and returns."""
-    holdings = session.scalars(select(Holding).where(Holding.quantity > 0)).all()
+    positions = _portfolio_positions(session)
     results: list[PortfolioValuation] = []
-    for holding in holdings:
-        item = session.get(Item, holding.item_id)
+    for position in positions:
+        item_id = int(position["item_id"])
+        item = session.get(Item, item_id)
         latest = session.scalar(
             select(PriceSnapshot)
-            .where(PriceSnapshot.item_id == holding.item_id)
+            .where(PriceSnapshot.item_id == item_id)
             .where(PriceSnapshot.is_suspicious.is_(False))
             .where(PriceSnapshot.lowest_listing_price.is_not(None))
             .where(PriceSnapshot.highest_buy_order_price.is_not(None))
@@ -95,43 +103,56 @@ def calculate_portfolio(session: Session) -> list[PortfolioValuation]:
         )
         if item is None or latest is None:
             continue
-        quantity = Decimal(holding.quantity)
-        avg_cost = Decimal(holding.avg_cost)
+        quantity = Decimal(position["quantity"])
+        transaction_quantity = Decimal(position["transaction_quantity"])
+        manual_quantity = Decimal(position["manual_quantity"])
+        known_cost = position["known_cost"]
+        unknown_cost_quantity = Decimal(position["unknown_cost_quantity"])
+        known_quantity = quantity - unknown_cost_quantity
+        avg_cost = known_cost / known_quantity if known_cost is not None and known_quantity > 0 else None
         listing_price = Decimal(latest.lowest_listing_price)
         buy_order_price = Decimal(latest.highest_buy_order_price)
         latest_date = _as_utc(latest.captured_at).date()
-        unrealized_profit = (
-            quantity * (listing_price - avg_cost) if latest.currency == "CNY" else None
-        )
+        unrealized_profit = None
+        if known_cost is not None and latest.currency == "CNY":
+            unrealized_profit = known_quantity * listing_price - known_cost
+        non_calculable_value = unknown_cost_quantity * listing_price
         results.append(
             PortfolioValuation(
-                item_id=holding.item_id,
+                item_id=item_id,
                 market_name=item.market_name,
+                catalog_id=position["catalog_id"],
+                version=position["version"],
+                transaction_quantity=transaction_quantity,
+                manual_quantity=manual_quantity,
                 quantity=quantity,
                 avg_cost=avg_cost,
+                known_cost=known_cost,
+                unknown_cost_quantity=unknown_cost_quantity,
                 currency=latest.currency,
                 listing_price=listing_price,
                 buy_order_price=buy_order_price,
                 listing_value=quantity * listing_price,
                 quick_sell_value=quantity * buy_order_price,
                 unrealized_profit=unrealized_profit,
+                non_calculable_value=non_calculable_value,
                 change_24h=_change_since(
                     session,
-                    holding.item_id,
+                    item_id,
                     latest_date - timedelta(days=1),
                     listing_price,
                     latest.currency,
                 ),
                 change_7d=_change_since(
                     session,
-                    holding.item_id,
+                    item_id,
                     latest_date - timedelta(days=7),
                     listing_price,
                     latest.currency,
                 ),
                 change_30d=_change_since(
                     session,
-                    holding.item_id,
+                    item_id,
                     latest_date - timedelta(days=30),
                     listing_price,
                     latest.currency,
@@ -139,6 +160,69 @@ def calculate_portfolio(session: Session) -> list[PortfolioValuation]:
             )
         )
     return results
+
+
+def _portfolio_positions(session: Session) -> list[dict[str, object]]:
+    """Return transaction and manual quantities grouped by valuation identity."""
+    positions: dict[tuple[int, str | None, str | None], dict[str, object]] = {}
+    holdings = session.scalars(select(Holding).where(Holding.quantity > 0)).all()
+    for holding in holdings:
+        key = (holding.item_id, None, None)
+        quantity = Decimal(holding.quantity)
+        avg_cost = Decimal(holding.avg_cost)
+        positions[key] = {
+            "item_id": holding.item_id,
+            "catalog_id": None,
+            "version": None,
+            "transaction_quantity": quantity,
+            "manual_quantity": Decimal("0"),
+            "quantity": quantity,
+            "known_cost": quantity * avg_cost,
+            "unknown_cost_quantity": Decimal("0"),
+        }
+
+    manual_rows = session.scalars(
+        select(ManualHolding).where(ManualHolding.is_active.is_(True))
+    ).all()
+    for manual in manual_rows:
+        key = _manual_portfolio_key(manual)
+        position = positions.setdefault(
+            key,
+            {
+                "item_id": manual.item_id,
+                "catalog_id": key[1],
+                "version": key[2],
+                "transaction_quantity": Decimal("0"),
+                "manual_quantity": Decimal("0"),
+                "quantity": Decimal("0"),
+                "known_cost": None,
+                "unknown_cost_quantity": Decimal("0"),
+            },
+        )
+        quantity = Decimal(manual.quantity)
+        position["manual_quantity"] = Decimal(position["manual_quantity"]) + quantity
+        position["quantity"] = Decimal(position["quantity"]) + quantity
+        if manual.unit_cost is None:
+            position["unknown_cost_quantity"] = Decimal(position["unknown_cost_quantity"]) + quantity
+        else:
+            current_known_cost = position["known_cost"]
+            position["known_cost"] = (current_known_cost or Decimal("0")) + quantity * Decimal(
+                manual.unit_cost
+            )
+
+    return [
+        position
+        for position in positions.values()
+        if Decimal(position["quantity"]) > 0
+    ]
+
+
+def _manual_portfolio_key(manual: ManualHolding) -> tuple[int, str | None, str | None]:
+    """Keep versioned catalog holdings separate from market-name-only rows."""
+    version = (manual.version or "").strip()
+    if version:
+        return (manual.item_id, manual.catalog_id, version)
+    return (manual.item_id, None, None)
 
 
 def _change_since(
@@ -164,18 +248,22 @@ def portfolio_dataframe(rows: list[PortfolioValuation]) -> pd.DataFrame:
     return pd.DataFrame([row.__dict__ for row in rows])
 
 
-def calculate_item_analysis(session: Session, item_id: int) -> ItemAnalysis:
+def calculate_item_analysis(session: Session, item_id: int, max_snapshots: int | None = None) -> ItemAnalysis:
     """Build item analysis data for the Streamlit page."""
     item = session.get(Item, item_id)
     if item is None:
         raise ValueError(f"Item {item_id} not found")
 
-    snapshots = list(
-        session.scalars(
-            select(PriceSnapshot)
-            .where(PriceSnapshot.item_id == item_id)
-            .order_by(PriceSnapshot.captured_at, PriceSnapshot.id)
-        ).all()
+    snapshot_query = (
+        select(PriceSnapshot)
+        .where(PriceSnapshot.item_id == item_id)
+        .order_by(PriceSnapshot.captured_at.desc(), PriceSnapshot.id.desc())
+    )
+    if max_snapshots is not None:
+        snapshot_query = snapshot_query.limit(max_snapshots)
+    snapshots = sorted(
+        session.scalars(snapshot_query).all(),
+        key=lambda snapshot: (_as_utc(snapshot.captured_at), snapshot.id),
     )
     normal_snapshots = [
         snapshot

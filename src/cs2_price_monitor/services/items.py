@@ -1,9 +1,25 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from dataclasses import dataclass
+
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from cs2_price_monitor.models import Item
+from cs2_price_monitor.models import Alert, DailyPriceSummary, Holding, Item, ManualHolding, PriceSnapshot, Transaction
+
+
+@dataclass(frozen=True)
+class DeleteItemResult:
+    """Counts of rows deleted with an item."""
+
+    item_id: int
+    market_name: str
+    price_snapshots: int
+    daily_price_summaries: int
+    transactions: int
+    holdings: int
+    manual_holdings: int
+    alerts: int
 
 
 def add_item(
@@ -79,3 +95,30 @@ def set_item_active(session: Session, item_id: int, is_active: bool) -> Item:
     item.is_active = is_active
     session.flush()
     return item
+
+
+def delete_item_with_related_data(session: Session, item_id: int) -> DeleteItemResult:
+    """Delete one item and all rows that reference it."""
+    item = session.get(Item, item_id)
+    if item is None:
+        raise ValueError(f"Item {item_id} not found")
+
+    result = DeleteItemResult(
+        item_id=item.id,
+        market_name=item.market_name,
+        price_snapshots=_delete_by_item_id(session, PriceSnapshot, item.id),
+        daily_price_summaries=_delete_by_item_id(session, DailyPriceSummary, item.id),
+        transactions=_delete_by_item_id(session, Transaction, item.id),
+        holdings=_delete_by_item_id(session, Holding, item.id),
+        manual_holdings=_delete_by_item_id(session, ManualHolding, item.id),
+        alerts=_delete_by_item_id(session, Alert, item.id),
+    )
+    session.delete(item)
+    session.flush()
+    return result
+
+
+def _delete_by_item_id(session: Session, model, item_id: int) -> int:
+    """Delete rows for one item_id and return the affected row count."""
+    rowcount = session.execute(delete(model).where(model.item_id == item_id)).rowcount
+    return int(rowcount or 0)

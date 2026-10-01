@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 @dataclass(frozen=True)
 class DatabaseConfig:
@@ -85,6 +87,8 @@ class CSInventoryApiConfig:
     base_url: str
     timeout_seconds: float
     market: str
+    app_id: str
+    currency: str
     price_endpoint_template: str | None
     auth_header_name: str | None
     auth_query_param_name: str | None
@@ -110,13 +114,15 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 
 def load_settings() -> Settings:
     """Load YAML and .env config."""
-    load_dotenv()
-    config_path = Path(os.getenv("CS2_MONITOR_CONFIG", "config/app.yaml"))
+    load_dotenv(PROJECT_ROOT / ".env")
+    config_path = _project_path(os.getenv("CS2_MONITOR_CONFIG", "config/app.yaml"))
     raw = _read_yaml(config_path)
 
-    database_url = os.getenv(
-        "CS2_MONITOR_DATABASE_URL",
-        raw.get("database", {}).get("url", "sqlite:///data/cs2_monitor.sqlite3"),
+    database_url = _resolve_database_url(
+        os.getenv(
+            "CS2_MONITOR_DATABASE_URL",
+            raw.get("database", {}).get("url", "sqlite:///data/cs2_monitor.sqlite3"),
+        )
     )
     pricing = raw.get("pricing", {})
     app = raw.get("app", {})
@@ -158,7 +164,7 @@ def load_settings() -> Settings:
             api_key=os.getenv("CS2_MONITOR_CSINVENTORY_API_KEY") or None,
             base_url=os.getenv(
                 "CS2_MONITOR_CSINVENTORY_BASE_URL",
-                str(csinventoryapi.get("base_url", "")),
+                str(csinventoryapi.get("base_url", "https://csinventoryapi.com")),
             ).rstrip("/"),
             timeout_seconds=float(
                 os.getenv(
@@ -170,15 +176,23 @@ def load_settings() -> Settings:
                 "CS2_MONITOR_CSINVENTORY_MARKET",
                 str(csinventoryapi.get("market", "buff163")),
             ),
+            app_id=os.getenv(
+                "CS2_MONITOR_CSINVENTORY_APP_ID",
+                str(csinventoryapi.get("app_id", "730")),
+            ),
+            currency=os.getenv(
+                "CS2_MONITOR_CSINVENTORY_CURRENCY",
+                str(csinventoryapi.get("currency", "cny")),
+            ).lower(),
             price_endpoint_template=os.getenv("CS2_MONITOR_CSINVENTORY_PRICE_ENDPOINT_TEMPLATE")
             or csinventoryapi.get("price_endpoint_template")
-            or None,
+            or "/api/v2/prices/{market_name}",
             auth_header_name=os.getenv("CS2_MONITOR_CSINVENTORY_AUTH_HEADER_NAME")
             or csinventoryapi.get("auth_header_name")
             or None,
             auth_query_param_name=os.getenv("CS2_MONITOR_CSINVENTORY_AUTH_QUERY_PARAM_NAME")
             or csinventoryapi.get("auth_query_param_name")
-            or None,
+            or "api_key",
         ),
         steamwebapi=SteamWebApiConfig(
             api_key=os.getenv("STEAMWEBAPI_API_KEY") or None,
@@ -217,3 +231,20 @@ def load_settings() -> Settings:
             ),
         ),
     )
+
+
+def _project_path(value: str) -> Path:
+    """Resolve relative paths from the project root."""
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def _resolve_database_url(url: str) -> str:
+    """Resolve relative SQLite database URLs from the project root."""
+    if not url.startswith("sqlite:///") or url == "sqlite:///:memory:":
+        return url
+    raw_path = url.replace("sqlite:///", "", 1)
+    path = Path(raw_path)
+    if path.is_absolute():
+        return url
+    return "sqlite:///" + str(PROJECT_ROOT / path)

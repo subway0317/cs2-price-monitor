@@ -1,8 +1,11 @@
 # CSInventoryAPI response fixtures
 
-`synthetic_success.json` is a synthetic response used only to test the configurable
-provider boundary. It is not a real CSInventoryAPI response and must not be
-treated as API documentation.
+`real_success_sanitized.json` is based on the sanitized HTTP 200 response provided
+from the official CSInventoryAPI documentation flow.
+
+`synthetic_success.json` is a synthetic response kept only for older provider-boundary
+tests. It is not a real CSInventoryAPI response and must not be treated as API
+documentation.
 
 When CSInventoryAPI access is available, add sanitized fixtures here:
 

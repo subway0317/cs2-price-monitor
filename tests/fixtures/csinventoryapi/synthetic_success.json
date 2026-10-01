@@ -3,10 +3,26 @@
     "fixture": "synthetic",
     "note": "This is not a real CSInventoryAPI response."
   },
-  "synthetic_quote": {
-    "lowest_listing_price": "123.45",
-    "highest_buy_order_price": "120.00",
-    "listing_count": 17,
-    "currency": "USD"
+  "spread": 0.017380141213647362,
+  "quantity": 9319,
+  "sell_price_cents": {
+    "cny": 20253,
+    "usd": 2987,
+    "eur": 2617,
+    "sek": 28857,
+    "dkk": 19561,
+    "nok": 29218,
+    "czk": 63500,
+    "brl": 15259
+  },
+  "buy_price_cents": {
+    "cny": 19901,
+    "usd": 2935,
+    "eur": 2571,
+    "sek": 28355,
+    "dkk": 19221,
+    "nok": 28710,
+    "czk": 62396,
+    "brl": 14993
   }
 }

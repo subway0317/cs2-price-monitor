@@ -80,13 +80,80 @@ PYTHONPATH=src streamlit run src/cs2_price_monitor/app.py
 ## 录入数据
 
 1. 打开“饰品管理”页面。
-2. 添加监控饰品，填写 `market_hash_name`、中文名和分类。
+2. 添加监控饰品，使用 Item Catalog 搜索中文、英文或别名后选择饰品。
 3. 在“饰品管理”页面可以启用、禁用、修改中文名和分类；重复 `market_hash_name` 会被拒绝。
 4. 打开“每日价格录入”页面，可以先使用顶部的外部 API 同步区域，也可以继续使用手动录入表单。
 5. 每次录入都会写入一条独立 `price_snapshots` 历史记录。
 6. 系统会生成 `daily_price_summaries`，包括 OHLC 和中位数价格。
 
 禁用饰品只会停止它出现在价格录入和交易记录页面，不会删除历史交易或价格数据。
+
+## Item Catalog
+
+Catalog 是可搜索的全局 CS2 物品目录，和本地数据库里的 monitored items 分离。Catalog 不依赖 `items` 表；用户从 Catalog 选择一个 `market_hash_name` 后，才会加入本地监控。
+
+目录结构：
+
+```text
+data/catalog_sources/       # Raw external JSON or CSV input
+data/catalog_generated/     # Generated normalized catalog_data.json
+src/cs2_price_monitor/catalog/catalog_data.json  # Small bundled example catalog
+```
+
+当前仓库内置的 `catalog_data.json` 只有 6 条箱子示例，用于测试和无外部目录时的兜底搜索，不是完整 CS2 Catalog。要生成完整目录，需要提供真实原始数据文件，例如：
+
+```text
+data/catalog_sources/cs2_items_raw.json
+```
+
+标准输出字段：
+
+```json
+{
+  "market_hash_name": "AK-47 | Redline (Field-Tested)",
+  "display_name_en": "AK-47 | Redline (Field-Tested)",
+  "display_name_cn": "",
+  "item_type": "Weapon",
+  "aliases": ["redline", "ak redline"],
+  "price_supported": true
+}
+```
+
+允许的 `item_type`：
+
+```text
+Case, Weapon, Knife, Glove, Sticker, Agent, Music Kit, Graffiti, Patch, Other
+```
+
+如果原始数据没有可靠分类，导入器会使用 `Other`，不会静默猜测。`market_hash_name` 是唯一主键；不同磨损等级、StatTrak 和普通版本必须保留为不同项目。
+
+导入 JSON 或 CSV：
+
+```bash
+python -m cs2_price_monitor.cli catalog import \
+  --input data/catalog_sources/cs2_items_raw.json \
+  --output data/catalog_generated/catalog_data.json
+```
+
+字段映射示例：
+
+```bash
+python -m cs2_price_monitor.cli catalog import \
+  --input data/catalog_sources/cs2_items_raw.csv \
+  --output data/catalog_generated/catalog_data.json \
+  --field market_hash_name=name \
+  --field display_name_en=english_name \
+  --field item_type=category \
+  --field aliases=search_terms
+```
+
+查看统计：
+
+```bash
+python -m cs2_price_monitor.cli catalog stats
+```
+
+输出包括 Catalog 总数、各 `item_type` 数量、缺少中文名称数量、重复数量和无效记录数量。
 
 ## 交易记录
 
@@ -137,23 +204,40 @@ market_name,transaction_type,quantity,unit_price,fee,occurred_at,notes
 
 ## CSInventoryAPI Starter 配置
 
-当前项目只完成 CSInventoryAPI 接入骨架，没有猜测真实端点、认证方式或 JSON 字段。HTTP 请求构造、响应解码和 `PriceQuote` 映射已拆分；在没有真实响应 schema 前，真实 provider 的映射阶段会抛出清晰的 `ApiSchemaNotConfiguredError`。
+当前项目已按官方 curl、Request URL 和脱敏 HTTP 200 响应完成 CSInventoryAPI 价格接口解析。HTTP 请求构造、响应解码和 `PriceQuote` 映射保持拆分。
 
-`.env.example` 中提供占位配置：
+已确认的接口信息：
+
+- Base URL: `https://csinventoryapi.com`
+- Price endpoint template: `/api/v2/prices/{market_name}`
+- API Key 位置: query 参数
+- API Key 字段名: `api_key`
+- 固定查询参数: `source=<CS2_MONITOR_CSINVENTORY_MARKET>`，`app_id=730`
+
+`.env.example` 中提供配置，默认仍为 manual 模式：
 
 ```text
 CS2_MONITOR_PRICE_MODE=manual
 CS2_MONITOR_API_PROVIDER=csinventoryapi
 CS2_MONITOR_CSINVENTORY_API_KEY=
-CS2_MONITOR_CSINVENTORY_BASE_URL=
+CS2_MONITOR_CSINVENTORY_BASE_URL=https://csinventoryapi.com
 CS2_MONITOR_CSINVENTORY_TIMEOUT_SECONDS=10
 CS2_MONITOR_CSINVENTORY_MARKET=buff163
-CS2_MONITOR_CSINVENTORY_PRICE_ENDPOINT_TEMPLATE=
+CS2_MONITOR_CSINVENTORY_APP_ID=730
+CS2_MONITOR_CSINVENTORY_CURRENCY=cny
+CS2_MONITOR_CSINVENTORY_PRICE_ENDPOINT_TEMPLATE=/api/v2/prices/{market_name}
 CS2_MONITOR_CSINVENTORY_AUTH_HEADER_NAME=
-CS2_MONITOR_CSINVENTORY_AUTH_QUERY_PARAM_NAME=
+CS2_MONITOR_CSINVENTORY_AUTH_QUERY_PARAM_NAME=api_key
 ```
 
-API Key 只从 `.env` 读取，不应写入代码、日志或 README。`CS2_MONITOR_CSINVENTORY_PRICE_ENDPOINT_TEMPLATE` 支持 `{item_id}`、`{market_name}`、`{buff_name}` 占位符，但真实模板必须来自官方文档。认证可以配置为 header 或 query 参数，具体名称也必须来自官方文档。
+API Key 只从 `.env` 读取，不应写入代码、日志或 README。`CS2_MONITOR_CSINVENTORY_PRICE_ENDPOINT_TEMPLATE` 支持 `{item_id}`、`{market_name}`、`{buff_name}` 占位符。
+
+字段映射：
+
+- `sell_price_cents.<currency>` -> `PriceQuote.lowest_listing_price`，除以 `100`
+- `buy_price_cents.<currency>` -> `PriceQuote.highest_buy_order_price`，除以 `100`
+- `quantity` -> `PriceQuote.listing_count`
+- `CS2_MONITOR_CSINVENTORY_CURRENCY` -> `PriceQuote.currency`
 
 SteamWebAPI provider 仍保留为可选非默认骨架：
 
@@ -172,11 +256,11 @@ STEAMWEBAPI_FIELD_CURRENCY=
 STEAMWEBAPI_FIELD_CAPTURED_AT=
 ```
 
-测试中的 `tests/fixtures/csinventoryapi/synthetic_success.json` 是 synthetic fixture，只用于验证适配边界，不代表真实 CSInventoryAPI 响应。SteamWebAPI 的 synthetic fixture 也仅用于保留旧骨架测试。
+测试中的 `tests/fixtures/csinventoryapi/real_success_sanitized.json` 基于脱敏后的真实 HTTP 200 响应。`synthetic_success.json` 只用于旧适配边界测试，不代表真实 CSInventoryAPI 响应。SteamWebAPI 的 synthetic fixture 也仅用于保留旧骨架测试。
 
 API provider 返回的价格、求购价和挂单量允许为 `None`，不会用 `0` 伪造缺失值。不同币种的数据不会直接用于涨跌幅或收益计算。
 
-注册 API 后，请提供以下脱敏材料再完成真实解析：
+如果后续接口版本变化，请提供以下脱敏材料更新解析：
 
 - 官方端点文档
 - 认证方式

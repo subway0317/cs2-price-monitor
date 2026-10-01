@@ -18,7 +18,7 @@ from cs2_price_monitor.config import (
     SteamWebApiFieldPaths,
 )
 from cs2_price_monitor.models import DailyPriceSummary, PriceSnapshot
-from cs2_price_monitor.providers.csinventoryapi import SyntheticCSInventoryApiProvider
+from cs2_price_monitor.providers.csinventoryapi import CSInventoryApiProvider
 from cs2_price_monitor.providers.manual import ManualPriceProvider
 from cs2_price_monitor.providers.steamwebapi import SteamWebApiProvider
 from cs2_price_monitor.services.items import add_item
@@ -44,9 +44,11 @@ def _settings(
             base_url="https://csinventoryapi.test",
             timeout_seconds=2.0,
             market="buff163",
-            price_endpoint_template="/quote/{market_name}",
-            auth_header_name="X-API-Key",
-            auth_query_param_name=None,
+            app_id="730",
+            currency="cny",
+            price_endpoint_template="/api/v2/prices/{market_name}",
+            auth_header_name=None,
+            auth_query_param_name="api_key",
         ),
         steamwebapi=SteamWebApiConfig(
             api_key=api_key,
@@ -119,21 +121,18 @@ def test_csinventory_partial_sync_failure_does_not_stop_batch(session):
     settings = _settings(api_provider=ApiProviderName.CSINVENTORYAPI)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if str(request.url).endswith("Bad%20CSInventory%20Item"):
+        if request.url.path.endswith("Bad CSInventory Item"):
             return httpx.Response(500, json={"error": "synthetic"})
         return httpx.Response(
             200,
             json={
-                "synthetic_quote": {
-                    "lowest_listing_price": "10",
-                    "highest_buy_order_price": "9",
-                    "listing_count": 3,
-                    "currency": "USD",
-                }
+                "quantity": 3,
+                "sell_price_cents": {"cny": 1000},
+                "buy_price_cents": {"cny": 900},
             },
         )
 
-    provider = SyntheticCSInventoryApiProvider(
+    provider = CSInventoryApiProvider(
         config=settings.csinventoryapi,
         items={
             bad.id: csinventory_item(bad.id, bad.market_name),
@@ -148,7 +147,7 @@ def test_csinventory_partial_sync_failure_does_not_stop_batch(session):
     assert summary.success_count == 1
     assert summary.failure_count == 1
     assert snapshots[0].provider == "csinventoryapi:buff163"
-    assert snapshots[0].currency == "USD"
+    assert snapshots[0].currency == "CNY"
 
 
 def test_manual_mode_returns_clear_sync_result_without_api_client(session):

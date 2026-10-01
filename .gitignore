@@ -12,3 +12,19 @@ venv/
 *.sqlite
 *.sqlite3
 exports/
+data/catalog_sources/skinport_items_raw.json
+logs/*.log
+logs/*.lock
+logs/last_automatic_sync.json
+# Core dump files
+core.[0-9]*
+# Local database
+data/*.sqlite3
+
+# Generated catalog data
+data/catalog_generated/*
+!data/catalog_generated/.gitkeep
+
+# Downloaded catalog source data
+data/catalog_sources/*
+!data/catalog_sources/.gitkeep

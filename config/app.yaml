@@ -14,5 +14,10 @@ api:
   provider: csinventoryapi
 
 csinventoryapi:
+  base_url: https://csinventoryapi.com
   timeout_seconds: "10"
   market: buff163
+  app_id: "730"
+  currency: cny
+  price_endpoint_template: /api/v2/prices/{market_name}
+  auth_query_param_name: api_key

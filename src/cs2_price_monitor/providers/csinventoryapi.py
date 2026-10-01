@@ -10,12 +10,7 @@ import httpx
 
 from cs2_price_monitor.config import CSInventoryApiConfig
 from cs2_price_monitor.providers.base import PriceProvider, PriceQuote
-from cs2_price_monitor.providers.errors import (
-    ApiConfigurationError,
-    ApiDecodeError,
-    ApiHttpError,
-    ApiSchemaNotConfiguredError,
-)
+from cs2_price_monitor.providers.errors import ApiConfigurationError, ApiDecodeError, ApiHttpError
 
 
 @dataclass(frozen=True)
@@ -91,6 +86,9 @@ class CSInventoryApiProvider(PriceProvider):
             headers[self.config.auth_header_name] = self.config.api_key or ""
         if self.config.auth_query_param_name:
             params[self.config.auth_query_param_name] = self.config.api_key or ""
+        params["source"] = self.config.market
+        params["app_id"] = self.config.app_id
+        headers["accept"] = "application/json"
         return self.client.build_request("GET", endpoint, headers=headers, params=params)
 
     def _send_request(self, request: httpx.Request) -> httpx.Response:
@@ -116,10 +114,19 @@ class CSInventoryApiProvider(PriceProvider):
         return payload
 
     def _map_quote(self, item_id: int, payload: dict[str, Any]) -> PriceQuote:
-        """Map decoded JSON into PriceQuote after the real schema is known."""
-        raise ApiSchemaNotConfiguredError(
-            "CSInventoryAPI response schema is not configured. Provide sanitized real JSON "
-            "and official field documentation before mapping PriceQuote fields."
+        """Map the documented CSInventoryAPI price response into PriceQuote."""
+        currency = self.config.currency.lower()
+        sell_price_cents = payload.get("sell_price_cents")
+        buy_price_cents = payload.get("buy_price_cents")
+        return PriceQuote(
+            item_id=item_id,
+            provider=self.provider_name,
+            lowest_listing_price=_price_from_cents_map(sell_price_cents, currency),
+            highest_buy_order_price=_price_from_cents_map(buy_price_cents, currency),
+            listing_count=_optional_int(payload.get("quantity")),
+            currency=currency.upper(),
+            captured_at=datetime.now(timezone.utc),
+            raw_payload={"response": payload, "selected_currency": currency},
         )
 
 
@@ -130,9 +137,9 @@ class SyntheticCSInventoryApiProvider(CSInventoryApiProvider):
         """Map the synthetic fixture into PriceQuote."""
         data = payload.get("synthetic_quote")
         if not isinstance(data, Mapping):
-            raise ApiSchemaNotConfiguredError("Synthetic fixture missing synthetic_quote")
+            raise ApiDecodeError("Synthetic fixture missing synthetic_quote")
         if "currency" not in data:
-            raise ApiSchemaNotConfiguredError("Synthetic fixture missing currency")
+            raise ApiDecodeError("Synthetic fixture missing currency")
         return PriceQuote(
             item_id=item_id,
             provider=self.provider_name,
@@ -173,3 +180,22 @@ def validate_csinventoryapi_config(config: CSInventoryApiConfig) -> None:
         raise ApiConfigurationError(
             "Missing CSInventoryAPI configuration: " + ", ".join(missing)
         )
+
+
+def _price_from_cents_map(value: Any, currency: str) -> Decimal | None:
+    """Read one currency from a cents map and convert it to major units."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ApiDecodeError("CSInventoryAPI price field must be an object keyed by currency")
+    cents = value.get(currency)
+    if cents is None:
+        return None
+    return Decimal(str(cents)) / Decimal("100")
+
+
+def _optional_int(value: Any) -> int | None:
+    """Convert an optional integer value."""
+    if value is None:
+        return None
+    return int(value)
